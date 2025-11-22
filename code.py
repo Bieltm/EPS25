@@ -1,5 +1,5 @@
 import streamlit as st
-import pandas as pdgit 
+import pandas as pd
 import pydeck as pdk
 
 st.title("Barris de Los Angeles")
