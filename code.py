@@ -3,6 +3,7 @@ import pandas as pd
 import pydeck as pdk
 import requests
 import time
+import code_dades
 
 # Configuración de la página
 st.set_page_config(page_title="El Joc de Barris - LA Finder", layout="wide")
@@ -107,9 +108,9 @@ def load_data_with_api():
         # Mezclamos datos reales con simulados (para los que no tenemos API fácil)
         b.update({
             # Datos REALES de la API
-            'raw_fiesta': real_data['bares_count'],
-            'raw_naturaleza': real_data['parques_count'],
-            'raw_movilidad': real_data['transporte_count'],
+            'fiesta': real_data['bares_count'],
+            'naturaleza': real_data['parques_count'],
+            'movilidad': real_data['transporte_count'],
             
             # Datos SIMULADOS (Hardcoded por falta de API pública abierta de crimen/precios)
             'seguridad': { 
@@ -150,9 +151,9 @@ def load_data_with_api():
         if max_val == min_val: return 5
         return (df[column] - min_val) / (max_val - min_val) * 10
 
-    df['vida_nocturna'] = normalize('raw_fiesta')
-    df['naturaleza'] = normalize('raw_naturaleza')
-    df['movilidad'] = normalize('raw_movilidad')
+    df['vida_nocturna'] = normalize('fiesta')
+    df['naturaleza'] = normalize('naturaleza')
+    df['movilidad'] = normalize('movilidad')
     
     return df
 
@@ -242,6 +243,7 @@ with col1:
         latitude=34.0522,
         longitude=-118.2437,
         zoom=9.5,
+
         pitch=45,
     )
 
@@ -259,7 +261,7 @@ with col1:
 
     # Tooltip enriquecido con datos reales
     tooltip = {
-        "html": "<b>{barrio}</b><br>Match: <b>{match_percentage:.1f}%</b><br>🌳 Parques (Real): {raw_naturaleza}<br>🍸 Locales (Real): {raw_fiesta}<br>🚌 Paradas (Real): {raw_movilidad}",
+        "html": "<b>{barrio}</b><br>Match: <b>{['match_percentage']:.1f}%</b><br>🌳 Parques (Real): {naturaleza}<br>🍸 Locales (Real): {fiesta}<br>🚌 Paradas (Real): {movilidad}",
         "style": {"backgroundColor": "steelblue", "color": "white"}
     }
 
@@ -285,9 +287,9 @@ with col2:
         # Motor de Justificación
         justificacion = []
         # Usamos los conteos reales para justificar
-        if row['raw_naturaleza'] > df['raw_naturaleza'].mean() and w_naturaleza > 5: justificacion.append("🌳 Muchos parques")
-        if row['raw_fiesta'] > df['raw_fiesta'].mean() and w_fiesta > 5: justificacion.append("🎉 Zona muy activa")
-        if row['raw_movilidad'] > df['raw_movilidad'].mean() and w_movilidad > 5: justificacion.append("🚌 Bien comunicado")
+        if row['naturaleza'] > df['naturaleza'].mean() and w_naturaleza > 5: justificacion.append("🌳 Muchos parques")
+        if row['fiesta'] > df['fiesta'].mean() and w_fiesta > 5: justificacion.append("🎉 Zona muy activa")
+        if row['movilidad'] > df['movilidad'].mean() and w_movilidad > 5: justificacion.append("🚌 Bien comunicado")
         
         if row['seguridad'] > 7 and w_seguridad > 5: justificacion.append("🛡️ Alta seguridad (Est.)")
         if row['coste_vida'] > 7 and w_precio > 5: justificacion.append("💰 Económico (Est.)")
@@ -299,4 +301,4 @@ with col2:
 # --- 5. TABLA DE DATOS RAW ---
 with st.expander("🕵️ Ver Datos Reales extraídos de la API"):
     st.info("Estos datos han sido extraídos en tiempo real de OpenStreetMap usando Overpass API.")
-    st.dataframe(df_sorted[['barrio', 'match_percentage', 'raw_naturaleza', 'raw_fiesta', 'raw_movilidad']])
+    st.dataframe(df_sorted[['barrio', 'match_percentage', 'naturaleza', 'fiesta', 'movilidad']])
