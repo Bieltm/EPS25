@@ -8,6 +8,28 @@ import code_dades
 # Configuración de la página
 st.set_page_config(page_title="El Joc de Barris - LA Finder", layout="wide")
 
+def add_bg_from_url():
+    st.markdown(
+         f"""
+         <style>
+         .stApp {{
+             background-image: url("https://images.unsplash.com/photo-1540650490933-d82724082648?q=80&w=2000&auto=format&fit=crop");
+             background-attachment: fixed;
+             background-size: cover;
+         }}
+         /* Esto oscurece el fondo para que se lean las letras */
+         [data-testid="stAppViewContainer"] > .main {{
+             background-color: rgba(0,0,0,0.7); 
+         }}
+         /* Color de texto blanco para contraste */
+         h1, h2, h3, p, div, span {{
+             color: white !important;
+         }}
+         </style>
+         """,
+         unsafe_allow_html=True
+     )
+add_bg_from_url()
 # --- 1. INTEGRACIÓN API OPENSTREETMAP (Overpass) ---
 # Esta función consulta datos reales. Usamos cache para no saturar la API cada vez que mueves un slider.
 @st.cache_data(show_spinner=False)
