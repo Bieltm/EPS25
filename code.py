@@ -8,7 +8,6 @@ import time
 st.set_page_config(page_title="El Joc de Barris - LA Finder", layout="wide")
 
 # --- 1. INTEGRACIÓN API OPENSTREETMAP (Overpass) ---
-# Esta función consulta datos reales. Usamos cache para no saturar la API cada vez que mueves un slider.
 @st.cache_data(show_spinner=False)
 def get_real_osm_data(lat, lon, radius=1500):
     """
@@ -18,7 +17,6 @@ def get_real_osm_data(lat, lon, radius=1500):
     overpass_url = "http://overpass-api.de/api/interpreter"
     
     # Consulta en lenguaje Overpass QL
-    # Contamos: Bares (Vida Nocturna), Parques (Naturaleza), Transporte (Movilidad)
     query = f"""
     [out:json];
     (
@@ -44,21 +42,15 @@ def get_real_osm_data(lat, lon, radius=1500):
         response = requests.post(overpass_url, data=query, timeout=25)
         if response.status_code == 200:
             data = response.json()
-            # La respuesta de 'out count' viene en elementos separados
-            # Estructura: elements: [ {id: 0, tags: {nodes: X, ...}}, ... ]
-            # Asumimos el orden de los bloques: 1.Bares, 2.Parques, 3.Transporte
             elements = data.get('elements', [])
             
-            # Sumamos nodos + ways + relations para cada grupo
             def extract_count(idx):
                 if idx < len(elements):
                     tags = elements[idx].get('tags', {})
-                    # Sumamos nodos, ways y relaciones si existen
                     total = int(tags.get('total', 0))
                     return total
                 return 0
 
-            # La salida de 'out count' genera un elemento por cada bloque cerrado con ';' y llamado a out.
             bares = extract_count(0)
             parques = extract_count(1)
             transporte = extract_count(2)
@@ -69,7 +61,6 @@ def get_real_osm_data(lat, lon, radius=1500):
                 'transporte_count': transporte
             }
     except Exception as e:
-        # En caso de error de conexión, devolvemos 0 para no romper la app
         pass
     
     return {'bares_count': 0, 'parques_count': 0, 'transporte_count': 0}
@@ -92,24 +83,21 @@ def load_data_with_api():
     
     results = []
     
-    # Barra de progreso para la carga de API
     progress_text = "📡 Conectando con satélites de OpenStreetMap..."
     my_bar = st.progress(0, text=progress_text)
     
     total_barrios = len(barrios)
     
     for i, b in enumerate(barrios):
-        # Llamada a la API
         real_data = get_real_osm_data(b['lat'], b['lon'])
         
-        # Mezclamos datos reales con simulados (para los que no tenemos API fácil o fiable pública)
         b.update({
             # Datos REALES de la API
             'fiesta': real_data['bares_count'],
             'naturaleza': real_data['parques_count'],
             'movilidad': real_data['transporte_count'],
             
-            # Datos SIMULADOS (Hardcoded por falta de API pública abierta de crimen/precios)
+            # Datos SIMULADOS (0-10)
             'seguridad': { 
                 'Beverly Hills': 10, 'Bel Air': 10, 'Pasadena': 8, 'Santa Monica': 7,
                 'West Hollywood': 7, 'Silver Lake': 6, 'Venice Beach': 5, 
@@ -128,7 +116,7 @@ def load_data_with_api():
                 'Koreatown': 3, 'Compton': 3, 'Downtown LA': 2
             }[b['barrio']],
              
-            'coste_vida': { # 1 = Muy caro, 10 = Barato
+            'coste_vida': { 
                 'Compton': 9, 'Koreatown': 6, 'Downtown LA': 5, 'Pasadena': 5,
                 'Silver Lake': 4, 'West Hollywood': 3, 'Santa Monica': 2, 
                 'Venice Beach': 2, 'Beverly Hills': 1, 'Bel Air': 1
@@ -140,18 +128,23 @@ def load_data_with_api():
     my_bar.empty()
     df = pd.DataFrame(results)
     
-    # --- NORMALIZACIÓN (0-10) ---
-    # Convertimos los conteos brutos (ej: 150 bares) a una nota del 0 al 10 relativa
-    def normalize(column):
-        min_val = df[column].min()
-        max_val = df[column].max()
-        if max_val == min_val: return 5
-        return (df[column] - min_val) / (max_val - min_val) * 10
+    # --- NORMALIZACIÓN INTELIGENTE (CAPPING) ---
+    # En lugar de dividir por el máximo (que suele ser un outlier como Downtown),
+    # definimos qué cantidad es "suficiente" para tener un 10.
+    
+    # Umbrales (Thresholds) para sacar un 10/10:
+    target_fiesta = 40      # Si hay más de 40 bares, es un 10.
+    target_naturaleza = 15  # Si hay más de 15 parques, es un 10.
+    target_movilidad = 60   # Si hay más de 60 paradas, es un 10.
 
-    df['vida_nocturna'] = normalize('fiesta')
-    # Guardamos los valores normalizados en columnas nuevas para el cálculo, mantenemos los originales para display
-    df['naturaleza_score'] = normalize('naturaleza')
-    df['movilidad_score'] = normalize('movilidad')
+    def apply_cap(val, target):
+        # Calcula ratio y limita a 10
+        score = (val / target) * 10
+        return min(10, score)
+
+    df['vida_nocturna'] = df['fiesta'].apply(lambda x: apply_cap(x, target_fiesta))
+    df['naturaleza_score'] = df['naturaleza'].apply(lambda x: apply_cap(x, target_naturaleza))
+    df['movilidad_score'] = df['movilidad'].apply(lambda x: apply_cap(x, target_movilidad))
     
     return df
 
@@ -172,7 +165,7 @@ perfil = st.sidebar.selectbox(
     ["Personalizado", "Cersei (Lujo y Seguridad)", "Jon Snow (Naturaleza y Comunidad)", "Tyrion (Fiesta y Cultura)", "Bran (Silencio y Tech)", "Arya (Movilidad y Anonimato)"]
 )
 
-# Valores por defecto de los sliders según el perfil
+# Valores por defecto
 defaults = {
     'seguridad': 5, 'lujo': 5, 'naturaleza': 5, 'fiesta': 5, 'movilidad': 5, 'tech': 5, 'precio': 5
 }
@@ -200,19 +193,16 @@ w_precio = st.sidebar.slider("Precio Asequible", 0, 10, defaults['precio'])
 
 # --- 3. ALGORITMO DE RECOMENDACIÓN (Weighted Scoring) ---
 def calcular_puntuacion(row):
-    # Suma de productos (Valor * Peso)
-    # Usamos las columnas normalizadas o hardcoded (0-10)
     score = (
         (row['seguridad'] * w_seguridad) +
         (row['lujo_privacidad'] * w_lujo) +
-        (row['naturaleza_score'] * w_naturaleza) + # Usamos el score normalizado
-        (row['vida_nocturna'] * w_fiesta) +        # Usamos el score normalizado
-        (row['movilidad_score'] * w_movilidad) +   # Usamos el score normalizado
+        (row['naturaleza_score'] * w_naturaleza) + 
+        (row['vida_nocturna'] * w_fiesta) +        
+        (row['movilidad_score'] * w_movilidad) +   
         (row['silencio_tech'] * w_tech) +
         (row['coste_vida'] * w_precio)
     )
     
-    # Evitar división por cero
     total_weights = w_seguridad + w_lujo + w_naturaleza + w_fiesta + w_movilidad + w_tech + w_precio
     if total_weights == 0:
         return 0
@@ -222,13 +212,8 @@ def calcular_puntuacion(row):
 # Aplicar cálculo
 if not df.empty:
     df['match_score'] = df.apply(calcular_puntuacion, axis=1)
-    # Escalar a 0-100 para mejor visualización
     df['match_percentage'] = (df['match_score'] / 10) * 100
-    
-    # CREAR COLUMNA FORMATEADA PARA TOOLTIP
-    # Pydeck no renderiza f-strings en el HTML del tooltip, así que pre-formateamos aquí
     df['tooltip_match'] = df['match_percentage'].apply(lambda x: f"{x:.1f}")
-    
     df_sorted = df.sort_values(by='match_percentage', ascending=False)
 else:
     st.error("No se pudieron cargar los datos.")
@@ -241,11 +226,9 @@ st.write("Descubre tu vecindario ideal con datos **reales** de OpenStreetMap y e
 col1, col2 = st.columns([3, 1])
 
 with col1:
-    # --- MAPA VISUAL (PYDECK) ---
     st.subheader("Mapa de Afinidad")
     
     def get_color(score):
-        # Gradiente de Rojo (bajo) a Verde (alto)
         r = int(255 * (1 - (score/10)))
         g = int(255 * (score/10))
         return [r, g, 0, 160]
@@ -259,8 +242,6 @@ with col1:
         pitch=45,
     )
 
-    # Tooltip enriquecido
-    # Corregido: Usamos 'tooltip_match' que es un string ya formateado
     tooltip = {
         "html": "<b>{barrio}</b><br>Match: <b>{tooltip_match}%</b><br>🌳 Parques (Real): {naturaleza}<br>🍸 Locales (Real): {fiesta}<br>🚌 Paradas (Real): {movilidad}",
         "style": {"backgroundColor": "steelblue", "color": "white"}
@@ -271,7 +252,7 @@ with col1:
         data=df,
         get_position='[lon, lat]',
         get_elevation='match_score',
-        elevation_scale=1000, # Aumentado para visibilidad
+        elevation_scale=1000, 
         radius=1000,
         get_fill_color='color',
         pickable=True,
@@ -287,34 +268,40 @@ with col1:
     ))
 
 with col2:
-    # --- TOP RECOMENDACIONES ---
     st.subheader("🏆 Top 3 Barrios")
     
     top_3 = df_sorted.head(3)
     
     for index, row in top_3.iterrows():
         st.markdown(f"### {row['barrio']}")
-        st.progress(int(row['match_percentage'] / 100 * 100)) # st.progress toma 0-100 o 0.0-1.0
-        st.caption(f"Afinidad: {row['match_percentage']:.1f}%")
         
-        # Motor de Justificación
-        justificacion = []
-        # Usamos medias para comparar
-        if row['naturaleza'] > df['naturaleza'].mean() and w_naturaleza > 5: justificacion.append("🌳 Muchos parques")
-        if row['fiesta'] > df['fiesta'].mean() and w_fiesta > 5: justificacion.append("🎉 Zona muy activa")
-        if row['movilidad'] > df['movilidad'].mean() and w_movilidad > 5: justificacion.append("🚌 Bien comunicado")
+        contributions = {
+            'Seguridad 🛡️': row['seguridad'] * w_seguridad,
+            'Lujo ✨': row['lujo_privacidad'] * w_lujo,
+            'Naturaleza 🌳': row['naturaleza_score'] * w_naturaleza,
+            'Fiesta 🍸': row['vida_nocturna'] * w_fiesta,
+            'Movilidad 🚌': row['movilidad_score'] * w_movilidad,
+            'Tech 💻': row['silencio_tech'] * w_tech,
+            'Precio 💰': row['coste_vida'] * w_precio
+        }
         
-        if row['seguridad'] > 7 and w_seguridad > 5: justificacion.append("🛡️ Alta seguridad")
-        if row['coste_vida'] > 7 and w_precio > 5: justificacion.append("💰 Económico")
+        sorted_factors = sorted(contributions.items(), key=lambda x: x[1], reverse=True)
+        top_reasons = [factor[0] for factor in sorted_factors if factor[1] > 0][:2]
         
-        if justificacion:
-            st.info(", ".join(justificacion))
+        if top_reasons:
+            text_reasons = f"Destaca por **{top_reasons[0]}**"
+            if len(top_reasons) > 1:
+                text_reasons += f" y **{top_reasons[1]}**"
+            st.markdown(f"{text_reasons}.")
         else:
-            st.write("Un buen equilibrio general.")
-            
+            st.markdown("Una opción equilibrada según tus filtros.")
+
+        val_progress = int(row['match_percentage'])
+        st.progress(max(0, min(100, val_progress)))
+        st.caption(f"Afinidad total: {row['match_percentage']:.1f}%")
+        
         st.divider()
 
-# --- 5. TABLA DE DATOS RAW ---
 with st.expander("🕵️ Ver Datos Reales extraídos de la API"):
     st.info("Estos datos han sido extraídos en tiempo real de OpenStreetMap usando Overpass API. (Columnas seleccionadas)")
     st.dataframe(df_sorted[['barrio', 'match_percentage', 'naturaleza', 'fiesta', 'movilidad', 'seguridad', 'coste_vida']])
