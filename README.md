@@ -20,7 +20,7 @@ Uns dels grans problemes ha sigut la nostra falta de coneixements envers a les A
 </p>
 
 <h1>
-What we learned ?
+Que hem apres ?
 </h1>
 <p>
 Hem aprés un munt d'aquesta experiència, ja que hem descobert com funcionen les APIs i com utilitzar les seves dades amb aquesta finalitat específica o alguna altra, i sobretot hem descobert i aprés molts fonaments nous del llenguatge Python.
