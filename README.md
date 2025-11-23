@@ -28,5 +28,7 @@ A més a més, hem après a fer servir amb major fluidesa GitHub i a com enllaç
 </p>
 <h2>
 Accés a la pagina web:
+</h2>
+<h2>
 https://codepy-8smxje4xehzs6dqholxbzd.streamlit.app/
 </h2>
