@@ -26,3 +26,7 @@ Que hem apres ?
 Hem aprés un munt d'aquesta experiència, ja que hem descobert com funcionen les APIs i com utilitzar les seves dades amb aquesta finalitat específica o alguna altra, i sobretot hem descobert i aprés molts fonaments nous del llenguatge Python.
 A més a més, hem après a fer servir amb major fluidesa GitHub i a com enllaçar-ho amb el codi, i sobretot a treballar en equip.
 </p>
+<h2>
+Accés a la pagina web:
+https://codepy-8smxje4xehzs6dqholxbzd.streamlit.app/
+</h2>
