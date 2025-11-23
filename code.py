@@ -3,40 +3,22 @@ import pandas as pd
 import pydeck as pdk
 import requests
 import time
-import numpy as np
 
-# --- 1. CONFIGURACIÓN ---
+# Configuración de la página
 st.set_page_config(page_title="El Joc de Barris - LA Finder", layout="wide")
 
-# Mantenemos solo el fondo de pantalla, sin los estilos de tarjetas complejas
-def add_bg_from_url():
-    st.markdown(
-         f"""
-         <style>
-         .stApp {{
-             background-image: url("https://images.unsplash.com/photo-1540650490933-d82724082648?q=80&w=2000&auto=format&fit=crop");
-             background-attachment: fixed;
-             background-size: cover;
-         }}
-         [data-testid="stAppViewContainer"] > .main {{
-             background-color: rgba(0,0,0,0.7); 
-         }}
-         h1, h2, h3, p, div, span, label, li {{
-             color: white !important;
-         }}
-         </style>
-         """,
-         unsafe_allow_html=True
-     )
-
-add_bg_from_url()
-
-# --- 2. API OPENSTREETMAP ---
+# --- 1. INTEGRACIÓN API OPENSTREETMAP (Overpass) ---
+# Esta función consulta datos reales. Usamos cache para no saturar la API cada vez que mueves un slider.
 @st.cache_data(show_spinner=False)
 def get_real_osm_data(lat, lon, radius=1500):
-    """Consulta Overpass API."""
+    """
+    Consulta la API de Overpass para contar elementos en un radio de 'radius' metros.
+    Devuelve un diccionario con los conteos reales.
+    """
     overpass_url = "http://overpass-api.de/api/interpreter"
     
+    # Consulta en lenguaje Overpass QL
+    # Contamos: Bares (Vida Nocturna), Parques (Naturaleza), Transporte (Movilidad)
     query = f"""
     [out:json];
     (
@@ -62,192 +44,277 @@ def get_real_osm_data(lat, lon, radius=1500):
         response = requests.post(overpass_url, data=query, timeout=25)
         if response.status_code == 200:
             data = response.json()
+            # La respuesta de 'out count' viene en elementos separados
+            # Estructura: elements: [ {id: 0, tags: {nodes: X, ...}}, ... ]
+            # Asumimos el orden de los bloques: 1.Bares, 2.Parques, 3.Transporte
             elements = data.get('elements', [])
+            
+            # Sumamos nodos + ways + relations para cada grupo
             def extract_count(idx):
                 if idx < len(elements):
                     tags = elements[idx].get('tags', {})
-                    return int(tags.get('total', 0))
+                    # Sumamos nodos, ways y relaciones si existen
+                    total = int(tags.get('total', 0))
+                    return total
                 return 0
+
+            # La salida de 'out count' genera un elemento por cada bloque cerrado con ';' y llamado a out.
+            bares = extract_count(0)
+            parques = extract_count(1)
+            transporte = extract_count(2)
+            
             return {
-                'bares_count': extract_count(0),
-                'parques_count': extract_count(1),
-                'transporte_count': extract_count(2)
+                'bares_count': bares,
+                'parques_count': parques,
+                'transporte_count': transporte
             }
     except Exception as e:
+        # En caso de error de conexión, devolvemos 0 para no romper la app
         pass
+    
     return {'bares_count': 0, 'parques_count': 0, 'transporte_count': 0}
 
-# --- 3. CARGA Y ALGORITMO (LA PARTE NUEVA) ---
 @st.cache_data
 def load_data_with_api():
-    # Datos con POBLACIÓN para el nuevo algoritmo
+    # Coordenadas base de barrios famosos de LA
     barrios = [
-        {'barrio': 'Bel Air', 'lat': 34.1002, 'lon': -118.4595, 'poblacion': 5000},
-        {'barrio': 'Beverly Hills', 'lat': 34.0736, 'lon': -118.4004, 'poblacion': 15000},
-        {'barrio': 'Pasadena', 'lat': 34.1478, 'lon': -118.1445, 'poblacion': 25000},
-        {'barrio': 'Santa Monica', 'lat': 34.0195, 'lon': -118.4912, 'poblacion': 30000},
-        {'barrio': 'Venice Beach', 'lat': 33.9850, 'lon': -118.4695, 'poblacion': 30000},
-        {'barrio': 'Silver Lake', 'lat': 34.0869, 'lon': -118.2702, 'poblacion': 25000},
-        {'barrio': 'West Hollywood', 'lat': 34.0900, 'lon': -118.3617, 'poblacion': 35000},
-        {'barrio': 'Downtown LA', 'lat': 34.0407, 'lon': -118.2468, 'poblacion': 60000},
-        {'barrio': 'Koreatown', 'lat': 34.0618, 'lon': -118.3004, 'poblacion': 70000},
-        {'barrio': 'Compton', 'lat': 33.8958, 'lon': -118.2201, 'poblacion': 40000}
+        {'barrio': 'Beverly Hills', 'lat': 34.0736, 'lon': -118.4004},
+        {'barrio': 'Downtown LA', 'lat': 34.0407, 'lon': -118.2468},
+        {'barrio': 'Silver Lake', 'lat': 34.0869, 'lon': -118.2702},
+        {'barrio': 'Santa Monica', 'lat': 34.0195, 'lon': -118.4912},
+        {'barrio': 'Compton', 'lat': 33.8958, 'lon': -118.2201},
+        {'barrio': 'Pasadena', 'lat': 34.1478, 'lon': -118.1445},
+        {'barrio': 'West Hollywood', 'lat': 34.0900, 'lon': -118.3617},
+        {'barrio': 'Venice Beach', 'lat': 33.9850, 'lon': -118.4695},
+        {'barrio': 'Koreatown', 'lat': 34.0618, 'lon': -118.3004},
+        {'barrio': 'Bel Air', 'lat': 34.1002, 'lon': -118.4595}
     ]
     
     results = []
-    progress_text = "📡 Conectando con satélite..."
+    
+    # Barra de progreso para la carga de API
+    progress_text = "📡 Conectando con satélites de OpenStreetMap..."
     my_bar = st.progress(0, text=progress_text)
     
+    total_barrios = len(barrios)
+    
     for i, b in enumerate(barrios):
+        # Llamada a la API
         real_data = get_real_osm_data(b['lat'], b['lon'])
+        
+        # Mezclamos datos reales con simulados (para los que no tenemos API fácil o fiable pública)
         b.update({
+            # Datos REALES de la API
             'fiesta': real_data['bares_count'],
             'naturaleza': real_data['parques_count'],
             'movilidad': real_data['transporte_count'],
-            # Datos estáticos
-            'seguridad': {'Beverly Hills': 10, 'Bel Air': 10, 'Pasadena': 8, 'Santa Monica': 7, 'West Hollywood': 7, 'Silver Lake': 6, 'Venice Beach': 5, 'Koreatown': 4, 'Downtown LA': 3, 'Compton': 2}[b['barrio']],
-            'lujo_privacidad': {'Beverly Hills': 10, 'Bel Air': 10, 'Santa Monica': 8, 'West Hollywood': 8, 'Pasadena': 7, 'Venice Beach': 6, 'Silver Lake': 5, 'Downtown LA': 4, 'Koreatown': 3, 'Compton': 1}[b['barrio']],
-            'silencio_tech': {'Bel Air': 9, 'Pasadena': 8, 'Beverly Hills': 7, 'Silver Lake': 6, 'Santa Monica': 5, 'West Hollywood': 4, 'Venice Beach': 4, 'Koreatown': 3, 'Compton': 3, 'Downtown LA': 2}[b['barrio']],
-            'coste_vida': {'Compton': 9, 'Koreatown': 6, 'Downtown LA': 5, 'Pasadena': 5, 'Silver Lake': 4, 'West Hollywood': 3, 'Santa Monica': 2, 'Venice Beach': 2, 'Beverly Hills': 1, 'Bel Air': 1}[b['barrio']]
+            
+            # Datos SIMULADOS (Hardcoded por falta de API pública abierta de crimen/precios)
+            'seguridad': { 
+                'Beverly Hills': 10, 'Bel Air': 10, 'Pasadena': 8, 'Santa Monica': 7,
+                'West Hollywood': 7, 'Silver Lake': 6, 'Venice Beach': 5, 
+                'Koreatown': 4, 'Downtown LA': 3, 'Compton': 2 
+            }[b['barrio']],
+            
+            'lujo_privacidad': {
+                'Beverly Hills': 10, 'Bel Air': 10, 'Santa Monica': 8, 'West Hollywood': 8,
+                'Pasadena': 7, 'Venice Beach': 6, 'Silver Lake': 5, 'Downtown LA': 4,
+                'Koreatown': 3, 'Compton': 1
+            }[b['barrio']],
+            
+            'silencio_tech': {
+                'Bel Air': 9, 'Pasadena': 8, 'Beverly Hills': 7, 'Silver Lake': 6,
+                'Santa Monica': 5, 'West Hollywood': 4, 'Venice Beach': 4,
+                'Koreatown': 3, 'Compton': 3, 'Downtown LA': 2
+            }[b['barrio']],
+             
+            'coste_vida': { # 1 = Muy caro, 10 = Barato
+                'Compton': 9, 'Koreatown': 6, 'Downtown LA': 5, 'Pasadena': 5,
+                'Silver Lake': 4, 'West Hollywood': 3, 'Santa Monica': 2, 
+                'Venice Beach': 2, 'Beverly Hills': 1, 'Bel Air': 1
+            }[b['barrio']]
         })
         results.append(b)
-        my_bar.progress((i + 1) / len(barrios), text=f"Analizando {b['barrio']}...")
+        my_bar.progress((i + 1) / total_barrios, text=f"Analizando {b['barrio']}...")
     
     my_bar.empty()
     df = pd.DataFrame(results)
     
-    # --- ALGORITMO HÍBRIDO (Lo que querías mantener) ---
-    def calculate_smart_score(row, column, target_ratio_per_10k, min_critical_mass):
-        if row[column] < min_critical_mass:
-            penalty_factor = row[column] / min_critical_mass if min_critical_mass > 0 else 0
-            return penalty_factor * 4.0 
-        
-        ratio = (row[column] / row['poblacion']) * 10000
-        score = (ratio / target_ratio_per_10k) * 10
-        return min(10.0, score)
+    # --- NORMALIZACIÓN (0-10) ---
+    # Convertimos los conteos brutos (ej: 150 bares) a una nota del 0 al 10 relativa
+    def normalize(column):
+        min_val = df[column].min()
+        max_val = df[column].max()
+        if max_val == min_val: return 5
+        return (df[column] - min_val) / (max_val - min_val) * 10
 
-    # Aplicamos el algoritmo
-    df['vida_nocturna'] = df.apply(lambda row: calculate_smart_score(row, 'fiesta', 15, 10), axis=1)
-    df['naturaleza_score'] = df.apply(lambda row: calculate_smart_score(row, 'naturaleza', 3, 4), axis=1)
-    df['movilidad_score'] = df.apply(lambda row: calculate_smart_score(row, 'movilidad', 20, 15), axis=1)
-    
-    # Calculamos ratio para mostrar info
-    df['ratio_fiesta'] = (df['fiesta'] / df['poblacion']) * 10000
+    df['vida_nocturna'] = normalize('fiesta')
+    # Guardamos los valores normalizados en columnas nuevas para el cálculo, mantenemos los originales para display
+    df['naturaleza_score'] = normalize('naturaleza')
+    df['movilidad_score'] = normalize('movilidad')
     
     return df
 
+# Cargar datos
 try:
     df = load_data_with_api()
 except Exception as e:
-    st.error(f"Error: {e}")
+    st.error(f"Error cargando datos: {e}")
     st.stop()
 
-# --- 4. SIDEBAR (PERFILES) ---
+# --- 2. INTERFAZ DE USUARIO (SIDEBAR) ---
 st.sidebar.header("🏹 Configura tu Perfil")
-perfil = st.sidebar.selectbox("Arquetipo", ["Personalizado", "Cersei (Lujo)", "Jon Snow (Naturaleza)", "Tyrion (Fiesta)", "Bran (Tech)", "Arya (Movilidad)"])
+st.sidebar.markdown("Define qué es importante para ti para encontrar tu *Trono* en LA.")
 
-defaults = {'seguridad': 5, 'lujo': 5, 'naturaleza': 5, 'fiesta': 5, 'movilidad': 5, 'tech': 5, 'precio': 5}
-if perfil == "Cersei (Lujo)": defaults = {'seguridad': 10, 'lujo': 10, 'naturaleza': 2, 'fiesta': 4, 'movilidad': 0, 'tech': 5, 'precio': 0}
-elif perfil == "Jon Snow (Naturaleza)": defaults = {'seguridad': 6, 'lujo': 1, 'naturaleza': 10, 'fiesta': 3, 'movilidad': 4, 'tech': 2, 'precio': 8}
-elif perfil == "Tyrion (Fiesta)": defaults = {'seguridad': 4, 'lujo': 6, 'naturaleza': 2, 'fiesta': 10, 'movilidad': 8, 'tech': 5, 'precio': 5}
-elif perfil == "Bran (Tech)": defaults = {'seguridad': 8, 'lujo': 7, 'naturaleza': 5, 'fiesta': 0, 'movilidad': 2, 'tech': 10, 'precio': 2}
-elif perfil == "Arya (Movilidad)": defaults = {'seguridad': 5, 'lujo': 3, 'naturaleza': 4, 'fiesta': 7, 'movilidad': 10, 'tech': 6, 'precio': 6}
+# Preajustes basados en arquetipos
+perfil = st.sidebar.selectbox(
+    "¿Te identificas con algún arquetipo?",
+    ["Personalizado", "Cersei (Lujo y Seguridad)", "Jon Snow (Naturaleza y Comunidad)", "Tyrion (Fiesta y Cultura)", "Bran (Silencio y Tech)", "Arya (Movilidad y Anonimato)"]
+)
 
-st.sidebar.subheader("⚖️ Prioridades (0-10)")
-w_seguridad = st.sidebar.slider("Seguridad", 0, 10, defaults['seguridad'])
-w_lujo = st.sidebar.slider("Lujo", 0, 10, defaults['lujo'])
-w_naturaleza = st.sidebar.slider("Naturaleza", 0, 10, defaults['naturaleza'])
-w_fiesta = st.sidebar.slider("Vida Nocturna", 0, 10, defaults['fiesta'])
-w_movilidad = st.sidebar.slider("Movilidad", 0, 10, defaults['movilidad'])
-w_tech = st.sidebar.slider("Tech/Silencio", 0, 10, defaults['tech'])
-w_precio = st.sidebar.slider("Precio", 0, 10, defaults['precio'])
+# Valores por defecto de los sliders según el perfil
+defaults = {
+    'seguridad': 5, 'lujo': 5, 'naturaleza': 5, 'fiesta': 5, 'movilidad': 5, 'tech': 5, 'precio': 5
+}
 
-# --- 5. CÁLCULO PUNTUACIÓN FINAL ---
+if perfil == "Cersei (Lujo y Seguridad)":
+    defaults = {'seguridad': 10, 'lujo': 10, 'naturaleza': 2, 'fiesta': 4, 'movilidad': 0, 'tech': 5, 'precio': 0}
+elif perfil == "Jon Snow (Naturaleza y Comunidad)":
+    defaults = {'seguridad': 6, 'lujo': 1, 'naturaleza': 10, 'fiesta': 3, 'movilidad': 4, 'tech': 2, 'precio': 8}
+elif perfil == "Tyrion (Fiesta y Cultura)":
+    defaults = {'seguridad': 4, 'lujo': 6, 'naturaleza': 2, 'fiesta': 10, 'movilidad': 8, 'tech': 5, 'precio': 5}
+elif perfil == "Bran (Silencio y Tech)":
+    defaults = {'seguridad': 8, 'lujo': 7, 'naturaleza': 5, 'fiesta': 0, 'movilidad': 2, 'tech': 10, 'precio': 2}
+elif perfil == "Arya (Movilidad y Anonimato)":
+    defaults = {'seguridad': 5, 'lujo': 3, 'naturaleza': 4, 'fiesta': 7, 'movilidad': 10, 'tech': 6, 'precio': 6}
+
+# Sliders de preferencias (Pesos)
+st.sidebar.subheader("⚖️ Tus Prioridades (0-10)")
+w_seguridad = st.sidebar.slider("Seguridad (Baja criminalidad)", 0, 10, defaults['seguridad'])
+w_lujo = st.sidebar.slider("Lujo y Privacidad", 0, 10, defaults['lujo'])
+w_naturaleza = st.sidebar.slider("Naturaleza y Aire Libre", 0, 10, defaults['naturaleza'])
+w_fiesta = st.sidebar.slider("Vida Nocturna y Cultura", 0, 10, defaults['fiesta'])
+w_movilidad = st.sidebar.slider("Movilidad (Transporte/Andar)", 0, 10, defaults['movilidad'])
+w_tech = st.sidebar.slider("Silencio y Tech (Home Office)", 0, 10, defaults['tech'])
+w_precio = st.sidebar.slider("Precio Asequible", 0, 10, defaults['precio'])
+
+# --- 3. ALGORITMO DE RECOMENDACIÓN (Weighted Scoring) ---
 def calcular_puntuacion(row):
+    # Suma de productos (Valor * Peso)
+    # Usamos las columnas normalizadas o hardcoded (0-10)
     score = (
         (row['seguridad'] * w_seguridad) +
         (row['lujo_privacidad'] * w_lujo) +
-        (row['naturaleza_score'] * w_naturaleza) + 
-        (row['vida_nocturna'] * w_fiesta) +        
-        (row['movilidad_score'] * w_movilidad) +   
+        (row['naturaleza_score'] * w_naturaleza) + # Usamos el score normalizado
+        (row['vida_nocturna'] * w_fiesta) +        # Usamos el score normalizado
+        (row['movilidad_score'] * w_movilidad) +   # Usamos el score normalizado
         (row['silencio_tech'] * w_tech) +
         (row['coste_vida'] * w_precio)
     )
-    total = w_seguridad + w_lujo + w_naturaleza + w_fiesta + w_movilidad + w_tech + w_precio
-    return score / total if total > 0 else 0
+    
+    # Evitar división por cero
+    total_weights = w_seguridad + w_lujo + w_naturaleza + w_fiesta + w_movilidad + w_tech + w_precio
+    if total_weights == 0:
+        return 0
+    
+    return score / total_weights
 
+# Aplicar cálculo
 if not df.empty:
     df['match_score'] = df.apply(calcular_puntuacion, axis=1)
+    # Escalar a 0-100 para mejor visualización
     df['match_percentage'] = (df['match_score'] / 10) * 100
+    
+    # CREAR COLUMNA FORMATEADA PARA TOOLTIP
+    # Pydeck no renderiza f-strings en el HTML del tooltip, así que pre-formateamos aquí
     df['tooltip_match'] = df['match_percentage'].apply(lambda x: f"{x:.1f}")
-    df['tooltip_fiesta'] = df['ratio_fiesta'].apply(lambda x: f"{x:.1f}")
+    
     df_sorted = df.sort_values(by='match_percentage', ascending=False)
 else:
+    st.error("No se pudieron cargar los datos.")
     st.stop()
 
-# --- 6. LAYOUT PRINCIPAL (VISUALIZACIÓN CLÁSICA) ---
-st.title("🏰 El Joc de Barris: LA Edition")
-st.caption(f"Algoritmo v2.1: Masa Crítica + Densidad Poblacional. Perfil seleccionado: {perfil}")
+# --- 4. LAYOUT PRINCIPAL ---
+st.title("🏰 El Joc de Barris: Los Angeles Edition")
+st.write("Descubre tu vecindario ideal con datos **reales** de OpenStreetMap y estadísticas simuladas.")
 
 col1, col2 = st.columns([3, 1])
 
 with col1:
-    st.subheader("🗺️ Mapa de Afinidad")
+    # --- MAPA VISUAL (PYDECK) ---
+    st.subheader("Mapa de Afinidad")
     
     def get_color(score):
-        return [int(255 * (1 - (score/10))), int(255 * (score/10)), 0, 160]
+        # Gradiente de Rojo (bajo) a Verde (alto)
+        r = int(255 * (1 - (score/10)))
+        g = int(255 * (score/10))
+        return [r, g, 0, 160]
 
     df['color'] = df['match_score'].apply(get_color)
 
-    view_state = pdk.ViewState(latitude=34.0522, longitude=-118.2437, zoom=9.5, pitch=45)
-    
+    view_state = pdk.ViewState(
+        latitude=34.0522,
+        longitude=-118.2437,
+        zoom=9.5,
+        pitch=45,
+    )
+
+    # Tooltip enriquecido
+    # Corregido: Usamos 'tooltip_match' que es un string ya formateado
     tooltip = {
-        "html": "<b>{barrio}</b><br>Match: <b>{tooltip_match}%</b><br>👥 Pob: {poblacion}<br>🍸 Ratio Bares: {tooltip_fiesta}/10k",
+        "html": "<b>{barrio}</b><br>Match: <b>{tooltip_match}%</b><br>🌳 Parques (Real): {naturaleza}<br>🍸 Locales (Real): {fiesta}<br>🚌 Paradas (Real): {movilidad}",
         "style": {"backgroundColor": "steelblue", "color": "white"}
     }
 
     layer = pdk.Layer(
-        "ColumnLayer", 
-        data=df, 
-        get_position='[lon, lat]', 
-        get_elevation='match_score', 
-        elevation_scale=1000, 
-        radius=800, 
-        get_fill_color='color', 
-        pickable=True, 
-        auto_highlight=True
+        "ColumnLayer",
+        data=df,
+        get_position='[lon, lat]',
+        get_elevation='match_score',
+        elevation_scale=1000, # Aumentado para visibilidad
+        radius=1000,
+        get_fill_color='color',
+        pickable=True,
+        auto_highlight=True,
     )
-    
-    st.pydeck_chart(pdk.Deck(map_provider='carto', map_style='light', initial_view_state=view_state, layers=[layer], tooltip=tooltip))
+
+    st.pydeck_chart(pdk.Deck(
+        map_provider='carto',
+        map_style='light',
+        initial_view_state=view_state,
+        layers=[layer],
+        tooltip=tooltip
+    ))
 
 with col2:
-    st.subheader("🏆 Top 3 Recomendaciones")
+    # --- TOP RECOMENDACIONES ---
+    st.subheader("🏆 Top 3 Barrios")
     
     top_3 = df_sorted.head(3)
     
-    # --- AQUÍ ES DONDE HE RESTAURADO LA VISUALIZACIÓN ORIGINAL ---
     for index, row in top_3.iterrows():
         st.markdown(f"### {row['barrio']}")
-        st.progress(int(row['match_percentage']))
+        st.progress(int(row['match_percentage'] / 100 * 100)) # st.progress toma 0-100 o 0.0-1.0
         st.caption(f"Afinidad: {row['match_percentage']:.1f}%")
         
-        # Motor de Justificación (Texto simple, sin HTML raro)
+        # Motor de Justificación
         justificacion = []
+        # Usamos medias para comparar
+        if row['naturaleza'] > df['naturaleza'].mean() and w_naturaleza > 5: justificacion.append("🌳 Muchos parques")
+        if row['fiesta'] > df['fiesta'].mean() and w_fiesta > 5: justificacion.append("🎉 Zona muy activa")
+        if row['movilidad'] > df['movilidad'].mean() and w_movilidad > 5: justificacion.append("🚌 Bien comunicado")
         
-        # Usamos las métricas del nuevo algoritmo para decidir qué decir
-        if row['naturaleza_score'] > 6 and w_naturaleza > 4: justificacion.append("🌳 Muchos parques")
-        if row['vida_nocturna'] > 6 and w_fiesta > 4: justificacion.append("🎉 Zona muy activa")
-        if row['movilidad_score'] > 6 and w_movilidad > 4: justificacion.append("🚌 Bien comunicado")
-        
-        if row['seguridad'] > 7 and w_seguridad > 4: justificacion.append("🛡️ Alta seguridad")
-        if row['coste_vida'] > 7 and w_precio > 4: justificacion.append("💰 Económico")
+        if row['seguridad'] > 7 and w_seguridad > 5: justificacion.append("🛡️ Alta seguridad")
+        if row['coste_vida'] > 7 and w_precio > 5: justificacion.append("💰 Económico")
         
         if justificacion:
-            st.info("Destaca por: " + ", ".join(justificacion))
+            st.info(", ".join(justificacion))
         else:
-            st.write("Una opción equilibrada para tus criterios.")
+            st.write("Un buen equilibrio general.")
             
         st.divider()
 
-with st.expander("🛠️ Ver Datos (Algoritmo Híbrido)"):
-    st.dataframe(df_sorted[['barrio', 'match_percentage', 'vida_nocturna', 'ratio_fiesta', 'poblacion']])
+# --- 5. TABLA DE DATOS RAW ---
+with st.expander("🕵️ Ver Datos Reales extraídos de la API"):
+    st.info("Estos datos han sido extraídos en tiempo real de OpenStreetMap usando Overpass API. (Columnas seleccionadas)")
+    st.dataframe(df_sorted[['barrio', 'match_percentage', 'naturaleza', 'fiesta', 'movilidad', 'seguridad', 'coste_vida']])
